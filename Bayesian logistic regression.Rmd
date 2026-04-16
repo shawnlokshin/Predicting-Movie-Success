@@ -1,6 +1,6 @@
 ---
 title: "Bayesian Logistic Regression"
-author: "Fedor Bentsa"
+author: "Fedor Bentsa, Shawn Lokshin, Borys Kocherev"
 date: "2026-04-13"
 output: pdf_document
 ---
@@ -17,7 +17,7 @@ library(bayesplot)
 options(mc.cores = parallel::detectCores())
 ```
 
-## Load and prepare data
+##loading data
 
 ```{r}
 movies <- read.csv("tmdb_5000_movies.csv", stringsAsFactors = FALSE)
@@ -63,7 +63,7 @@ dim(movies)
 head(movies[, c("title", "budget", "revenue", "success")])
 ```
 
-## Extract genre information
+##extracting genre info
 
 ```{r}
 extract_genres <- function(genre_string) {
@@ -85,7 +85,7 @@ top_genres <- names(sort(table(all_genres), decreasing = TRUE))[1:5]
 top_genres
 ```
 
-## Create genre dummy variables
+##creating genre dummy variables
 
 ```{r}
 for (g in top_genres) {
@@ -114,7 +114,7 @@ model_data <- movies %>%
 head(model_data)
 ```
 
-## Split into training and testing sets
+##splitting into training and testing sets
 
 ```{r}
 set.seed(4420)
@@ -129,31 +129,75 @@ dim(train_data)
 dim(test_data)
 ```
 
-## Fit Bayesian logistic regression
+##tunning prior strength
 
 ```{r}
-bayes_model <- stan_glm(
-  success ~ .,
-  data = train_data,
-  family = binomial(link = "logit"),
-  prior = normal(0, 2.5, autoscale = TRUE),
-  prior_intercept = normal(0, 5, autoscale = TRUE),
-  chains = 4,
-  iter = 2000,
-  seed = 4420,
-  refresh = 0
+prior_values <- c(2.5, 2.0, 1.5, 1.0, 0.5)
+
+results <- data.frame(
+  prior_sd = numeric(),
+  accuracy = numeric()
 )
+
+model_list <- list()
+
+for (p in prior_values) {
+  
+  temp_model <- stan_glm(
+    success ~ .,
+    data = train_data,
+    family = binomial(link = "logit"),
+    prior = normal(0, p, autoscale = TRUE),
+    prior_intercept = normal(0, 5, autoscale = TRUE),
+    chains = 4,
+    iter = 2000,
+    seed = 4420,
+    refresh = 0
+  )
+  
+  posterior_probs <- posterior_linpred(
+    temp_model,
+    newdata = test_data,
+    transform = TRUE
+  )
+  
+  mean_probs <- colMeans(posterior_probs)
+  pred_class <- ifelse(mean_probs >= 0.5, 1, 0)
+  
+  acc <- mean(pred_class == test_data$success)
+  
+  results <- rbind(
+    results,
+    data.frame(prior_sd = p, accuracy = acc)
+  )
+  
+  model_list[[as.character(p)]] <- temp_model
+}
+
+results
+```
+
+##choosing best prior
+
+```{r}
+best_prior <- results$prior_sd[which.max(results$accuracy)]
+best_prior
+```
+
+##fitting final Bayesian logistic regression model
+
+```{r}
+bayes_model <- model_list[[as.character(best_prior)]]
 
 summary(bayes_model)
 ```
 
-## Posterior intervals
 
 ```{r}
 posterior_interval(bayes_model, prob = 0.95)
 ```
 
-## Test set predictions
+##final test set predictions
 
 ```{r}
 posterior_probs <- posterior_linpred(
@@ -166,6 +210,7 @@ mean_probs <- colMeans(posterior_probs)
 pred_class <- ifelse(mean_probs >= 0.5, 1, 0)
 
 accuracy <- mean(pred_class == test_data$success)
+cat("Best prior SD:", best_prior, "\n")
 cat("Test Accuracy:", round(accuracy, 4), "\n")
 
 conf_mat <- table(
@@ -176,7 +221,7 @@ conf_mat <- table(
 conf_mat
 ```
 
-## Posterior plot
+##posterior plot
 
 ```{r}
 posterior <- as.matrix(bayes_model)
